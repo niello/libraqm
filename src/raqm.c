@@ -262,6 +262,17 @@ _raqm_compare_text_info (_raqm_text_info a,
   return true;
 }
 
+static void
+_raqm_free_text(raqm_t* rq)
+{
+    free(rq->text);
+    rq->text = NULL;
+    rq->text_info = NULL;
+    rq->text_utf8 = NULL;
+    rq->text_len = 0;
+    rq->text_capacity_bytes = 0;
+}
+
 static bool
 _raqm_alloc_text(raqm_t *rq,
                  size_t  len,
@@ -289,17 +300,6 @@ _raqm_alloc_text(raqm_t *rq,
   rq->text_utf8 = need_utf8 ? (char*)(rq->text_info + len) : NULL;
 
   return true;
-}
-
-static void
-_raqm_free_text (raqm_t *rq)
-{
-  free (rq->text);
-  rq->text = NULL;
-  rq->text_info = NULL;
-  rq->text_utf8 = NULL; 
-  rq->text_len = 0;
-  rq->text_capacity_bytes = 0;
 }
 
 static void
@@ -463,8 +463,6 @@ raqm_set_text (raqm_t         *rq,
                const uint32_t *text,
                size_t          len)
 {
-  hb_language_t default_lang;
-
   if (!rq || !text)
     return false;
 
