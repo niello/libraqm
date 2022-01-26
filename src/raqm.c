@@ -194,6 +194,7 @@ struct _raqm {
 
   raqm_run_t      *runs;
   raqm_glyph_t    *glyphs;
+  size_t           glyphs_capacity;
 
   int              invisible_glyph;
 };
@@ -356,6 +357,7 @@ raqm_create (void)
 
   rq->runs = NULL;
   rq->glyphs = NULL;
+  rq->glyphs_capacity = 0;
 
   return rq;
 }
@@ -425,12 +427,16 @@ raqm_clear_contents (raqm_t *rq,
   _raqm_release_text_info (rq);
 
   if (free_memory)
+  {
     _raqm_free_text (rq);
 
+    free (rq->glyphs);
+    rq->glyphs = NULL;
+    rq->glyphs_capacity = 0;
+  }
+
   _raqm_free_runs (rq);
-  free (rq->glyphs);
   rq->runs = NULL;
-  rq->glyphs = NULL;
 
   rq->text_len = 0;
   rq->resolved_dir = RAQM_DIRECTION_DEFAULT;
@@ -1032,17 +1038,20 @@ raqm_get_glyphs (raqm_t *rq,
   for (raqm_run_t *run = rq->runs; run != NULL; run = run->next)
     count += hb_buffer_get_length (run->buffer);
 
-  *length = count;
-
-  if (rq->glyphs)
-    free (rq->glyphs);
-
-  rq->glyphs = malloc (sizeof (raqm_glyph_t) * count);
-  if (!rq->glyphs)
+  if (count > rq->glyphs_capacity)
   {
-    *length = 0;
-    return NULL;
+    void* new_mem = realloc (rq->glyphs, sizeof (raqm_glyph_t) * count);
+    if (!new_mem)
+    {
+      *length = 0;
+      return NULL;
+    }
+    
+    rq->glyphs = new_mem;
+    rq->glyphs_capacity = count;
   }
+
+  *length = count;
 
   RAQM_TEST ("Glyph information:\n");
 
