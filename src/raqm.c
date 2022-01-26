@@ -182,6 +182,7 @@ struct _raqm {
   uint32_t        *text;
   char            *text_utf8;
   size_t           text_len;
+  size_t           text_capacity;
 
   _raqm_text_info *text_info;
 
@@ -212,30 +213,6 @@ struct _raqm_run {
 static uint32_t
 _raqm_u8_to_u32_index (raqm_t   *rq,
                        uint32_t  index);
-
-static bool
-_raqm_init_text_info (raqm_t *rq)
-{
-  hb_language_t default_lang;
-
-  if (rq->text_info)
-    return true;
-
-  rq->text_info = malloc (sizeof (_raqm_text_info) * rq->text_len);
-  if (!rq->text_info)
-    return false;
-
-  default_lang = hb_language_get_default ();
-  for (size_t i = 0; i < rq->text_len; i++)
-  {
-    rq->text_info[i].ftface = NULL;
-    rq->text_info[i].ftloadflags = -1;
-    rq->text_info[i].lang = default_lang;
-    rq->text_info[i].script = HB_SCRIPT_INVALID;
-  }
-
-  return true;
-}
 
 static void
 _raqm_free_text_info (raqm_t *rq)
@@ -278,6 +255,7 @@ _raqm_init_intermediate_data (raqm_t* rq)
   rq->text = NULL;
   rq->text_utf8 = NULL;
   rq->text_len = 0;
+  rq->text_capacity = 0;
 
   rq->text_info = NULL;
 
@@ -285,6 +263,16 @@ _raqm_init_intermediate_data (raqm_t* rq)
 
   rq->runs = NULL;
   rq->glyphs = NULL;
+}
+
+static void
+_raqm_free_intermediate_data (raqm_t *rq)
+{
+  free (rq->text);
+  free (rq->text_utf8);
+  _raqm_free_text_info (rq);
+  _raqm_free_runs (rq);
+  free (rq->glyphs);
 }
 
 /**
@@ -359,16 +347,6 @@ _raqm_free_runs (raqm_t *rq)
   }
 }
 
-static void
-_raqm_free_intermediate_data (raqm_t *rq)
-{
-  free (rq->text);
-  free (rq->text_utf8);
-  _raqm_free_text_info (rq);
-  _raqm_free_runs (rq);
-  free (rq->glyphs);
-}
-
 /**
  * raqm_destroy:
  * @rq: a #raqm_t.
@@ -386,12 +364,14 @@ raqm_destroy (raqm_t *rq)
     return;
 
   _raqm_free_intermediate_data (rq);
+  free (rq->features);
   free (rq);
 }
 
 /**
  * raqm_clear_contents:
  * @rq: a #raqm_t.
+ * @free_memory: whether to free internal buffers or to keep them for reuse.
  *
  * Clears internal state of previously used raqm_t object, making it
  * ready for reuse.
@@ -399,7 +379,8 @@ raqm_destroy (raqm_t *rq)
  * Since: 0.9
  */
 void
-raqm_clear_contents (raqm_t *rq)
+raqm_clear_contents (raqm_t *rq,
+                     bool    free_memory)
 {
   if (!rq)
     return;
@@ -429,32 +410,55 @@ raqm_set_text (raqm_t         *rq,
                const uint32_t *text,
                size_t          len)
 {
+  hb_language_t default_lang;
+
   if (!rq || !text)
     return false;
 
   /* Call raqm_clear_contents to reuse this raqm_t */
-  if (rq->text)
+  if (rq->text_len)
     return false;
 
   /* Empty string, don’t fail but do nothing */
   if (!len)
     return true;
 
-  rq->text_len = len;
-
-  rq->text = malloc (sizeof (uint32_t) * len);
-  if (!rq->text)
-    return false;
-
-  if (!_raqm_init_text_info (rq))
+//!!!realloc -  If there is not enough memory, the old memory block is not freed and null pointer is returned.
+//!!!fix realloc in features too!
+  if (len > rq->text_capacity)
   {
-    free (rq->text);
-    rq->text = NULL;
-    rq->text_len = 0;
-    return false;
+    /* Allocate contiguous memory block for both text and text_info */
+    void* new_mem = realloc (rq->text, (sizeof (uint32_t) + sizeof (_raqm_text_info)) * len);
+    if (!new_mem)
+    {
+    //!!!move to a function _raqm_free_text! UTF-8 there too!
+      free (rq->text_utf8);
+      rq->text_utf8 = NULL;
+      free (rq->text);
+      rq->text = NULL;
+      rq->text_info = NULL;
+      rq->text_len = 0;
+      rq->text_capacity = 0;
+      return false;
+    }
+
+    rq->text = new_mem;
+    rq->text_info = (void*)(rq->text + len);
+    rq->text_capacity = len;
   }
 
+  rq->text_len = len;
+
   memcpy (rq->text, text, sizeof (uint32_t) * len);
+
+  default_lang = hb_language_get_default ();
+  for (size_t i = 0; i < len; i++)
+  {
+    rq->text_info[i].ftface = NULL;
+    rq->text_info[i].ftloadflags = -1;
+    rq->text_info[i].lang = default_lang;
+    rq->text_info[i].script = HB_SCRIPT_INVALID;
+  }
 
   return true;
 }
@@ -520,9 +524,9 @@ _raqm_u8_to_u32 (const char *text, size_t len, uint32_t *unicode)
  * Since: 0.1
  */
 bool
-raqm_set_text_utf8 (raqm_t         *rq,
-                    const char     *text,
-                    size_t          len)
+raqm_set_text_utf8 (raqm_t     *rq,
+                    const char *text,
+                    size_t      len)
 {
   uint32_t *unicode;
   size_t ulen;
@@ -543,6 +547,7 @@ raqm_set_text_utf8 (raqm_t         *rq,
   if (!unicode)
     return false;
 
+//!!!reuse existing UTF-32 block when possible, it is not shrinked anyway!
   ulen = _raqm_u8_to_u32 (text, len, unicode);
   ok = raqm_set_text (rq, unicode, ulen);
 
